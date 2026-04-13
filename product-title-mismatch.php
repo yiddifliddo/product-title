@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Product Title Mismatch Scanner
- * Description: Scans ACF "product_title" field vs WordPress page title for the "product" custom post type. Lists mismatches and allows batch updating.
- * Version: 1.0.0
+ * Description: Scans ACF "product_title" vs WordPress page title for the "product" custom post type. Lists mismatches and allows batch updating.
+ * Version: 2.0.0
  * Author: Lab Res
  */
 
@@ -23,80 +23,30 @@ function ptm_add_admin_page() {
 }
 
 /**
- * Try to split a page title into [model_number, product_name].
- *
- * Supports these common separator patterns (checked in order):
- *   "MODEL123 - Product Name"
- *   "MODEL123 – Product Name"  (en-dash)
- *   "MODEL123 — Product Name"  (em-dash)
- *   "MODEL123: Product Name"
- *
- * If no separator is found the entire title is treated as the model number
- * and the product-name portion is empty.
+ * Build the correct page title from ACF fields.
+ * Format: "product_id product_title"
  */
-function ptm_split_title($title) {
-    // Order matters – check longer sequences first so " - " isn't consumed
-    // before " – ".
-    $separators = [' – ', ' — ', ' - ', ': '];
+function ptm_build_correct_title($product_id, $product_title) {
+    $id   = trim($product_id);
+    $desc = trim($product_title);
 
-    foreach ($separators as $sep) {
-        $pos = mb_strpos($title, $sep);
-        if ($pos !== false) {
-            $model = mb_substr($title, 0, $pos);
-            $name  = mb_substr($title, $pos + mb_strlen($sep));
-            return [trim($model), trim($name)];
-        }
+    if ($id === '' && $desc === '') {
+        return '';
+    }
+    if ($id === '') {
+        return $desc;
+    }
+    if ($desc === '') {
+        return $id;
     }
 
-    // No separator found – whole thing is treated as model number.
-    return [trim($title), ''];
+    return $id . ' ' . $desc;
 }
 
 /**
- * Build the new page title: MODEL_NUMBER + separator + product_title.
+ * Gather mismatch data for all products.
  */
-function ptm_build_new_title($current_title, $product_title) {
-    // Detect which separator the current title uses so we can preserve it.
-    $separators = [' – ', ' — ', ' - ', ': '];
-    $used_sep   = ' - '; // default
-
-    foreach ($separators as $sep) {
-        if (mb_strpos($current_title, $sep) !== false) {
-            $used_sep = $sep;
-            break;
-        }
-    }
-
-    list($model, ) = ptm_split_title($current_title);
-
-    // If the model portion is empty (shouldn't happen, but safety),
-    // just return the product_title as-is.
-    if ($model === '') {
-        return $product_title;
-    }
-
-    return $model . $used_sep . $product_title;
-}
-
-/**
- * Main admin page renderer.
- */
-function ptm_render_page() {
-    if (!current_user_can('manage_options')) {
-        wp_die('Unauthorized');
-    }
-
-    // ── Handle batch update POST ────────────────────────────────────────
-    if (
-        isset($_POST['ptm_action']) &&
-        $_POST['ptm_action'] === 'batch_update' &&
-        check_admin_referer('ptm_batch_update', 'ptm_nonce')
-    ) {
-        ptm_handle_batch_update();
-        return; // ptm_handle_batch_update() re-renders with results
-    }
-
-    // ── Fetch all products ──────────────────────────────────────────────
+function ptm_scan_products() {
     $products = get_posts([
         'post_type'      => 'product',
         'posts_per_page' => -1,
@@ -107,63 +57,85 @@ function ptm_render_page() {
 
     $mismatches = [];
     $matches    = 0;
+    $skipped    = 0;
 
     foreach ($products as $product) {
-        $page_title    = $product->post_title;
-        $product_title = get_field('product_title', $product->ID);
+        $page_title    = trim($product->post_title);
+        $product_id    = trim((string)get_field('product_id', $product->ID));
+        $product_title = trim((string)get_field('product_title', $product->ID));
 
-        // Normalise for comparison: trim whitespace.
-        $page_title_trimmed    = trim($page_title);
-        $product_title_trimmed = trim((string)$product_title);
-
-        // Skip if ACF field is empty – nothing to compare.
-        if ($product_title_trimmed === '') {
+        // Skip if both ACF fields are empty — nothing to build a title from.
+        if ($product_id === '' && $product_title === '') {
+            $skipped++;
             continue;
         }
 
-        // Extract the "product name" portion that sits after the model number.
-        list(, $name_portion) = ptm_split_title($page_title_trimmed);
+        $correct_title = ptm_build_correct_title($product_id, $product_title);
 
-        // A match means the portion after the model number already equals the
-        // ACF product_title.
-        if (mb_strtolower($name_portion) === mb_strtolower($product_title_trimmed)) {
+        if (mb_strtolower($page_title) === mb_strtolower($correct_title)) {
             $matches++;
         } else {
             $mismatches[] = [
                 'ID'            => $product->ID,
-                'page_title'    => $page_title_trimmed,
-                'product_title' => $product_title_trimmed,
-                'name_portion'  => $name_portion,
-                'new_title'     => ptm_build_new_title($page_title_trimmed, $product_title_trimmed),
+                'page_title'    => $page_title,
+                'product_id'    => $product_id,
+                'product_title' => $product_title,
+                'correct_title' => $correct_title,
                 'edit_link'     => get_edit_post_link($product->ID, 'raw'),
             ];
         }
     }
 
-    ptm_render_results_page($mismatches, $matches, count($products));
+    return [
+        'mismatches' => $mismatches,
+        'matches'    => $matches,
+        'skipped'    => $skipped,
+        'total'      => count($products),
+    ];
+}
+
+/**
+ * Main admin page renderer.
+ */
+function ptm_render_page() {
+    if (!current_user_can('manage_options')) {
+        wp_die('Unauthorized');
+    }
+
+    // Handle batch update POST.
+    if (
+        isset($_POST['ptm_action']) &&
+        $_POST['ptm_action'] === 'batch_update' &&
+        check_admin_referer('ptm_batch_update', 'ptm_nonce')
+    ) {
+        ptm_handle_batch_update();
+        return;
+    }
+
+    $scan = ptm_scan_products();
+    ptm_render_results_page($scan['mismatches'], $scan['matches'], $scan['total'], $scan['skipped']);
 }
 
 /**
  * Render the results / batch-update form.
  */
-function ptm_render_results_page($mismatches, $matches, $total, $updated_ids = []) {
+function ptm_render_results_page($mismatches, $matches, $total, $skipped, $updated_ids = []) {
     ?>
     <div class="wrap">
         <h1>Product Title Mismatch Scanner</h1>
 
         <p>
-            Scans the ACF field <code>product_title</code> against the WordPress
-            page title for every <strong>product</strong> post.
-            When updating, the <code>product_title</code> replaces the text
-            <em>after</em> the model number in the page title.
+            Compares each <strong>product</strong> page title against
+            <code>product_id product_title</code> built from the ACF fields.
         </p>
 
         <h2>Summary</h2>
-        <table class="widefat fixed" style="max-width:400px">
+        <table class="widefat fixed" style="max-width:450px">
             <tbody>
-                <tr><td><strong>Total products scanned</strong></td><td><?php echo esc_html($total); ?></td></tr>
+                <tr><td><strong>Total products</strong></td><td><?php echo esc_html($total); ?></td></tr>
                 <tr><td><strong>Matching</strong></td><td><?php echo esc_html($matches); ?></td></tr>
                 <tr style="color:#d63638"><td><strong>Mismatched</strong></td><td><?php echo esc_html(count($mismatches)); ?></td></tr>
+                <tr><td><strong>Skipped (no ACF data)</strong></td><td><?php echo esc_html($skipped); ?></td></tr>
             </tbody>
         </table>
 
@@ -183,15 +155,16 @@ function ptm_render_results_page($mismatches, $matches, $total, $updated_ids = [
                 <?php wp_nonce_field('ptm_batch_update', 'ptm_nonce'); ?>
                 <input type="hidden" name="ptm_action" value="batch_update">
 
-                <table class="widefat striped fixed" style="margin-top:10px">
+                <table class="widefat striped" style="margin-top:10px">
                     <thead>
                         <tr>
                             <th style="width:40px"><input type="checkbox" id="ptm-select-all"></th>
-                            <th style="width:60px">ID</th>
+                            <th style="width:50px">ID</th>
                             <th>Current Page Title</th>
-                            <th>ACF product_title</th>
-                            <th>New Title (preview)</th>
-                            <th style="width:60px">Edit</th>
+                            <th style="width:160px">product_id</th>
+                            <th>product_title</th>
+                            <th>Correct Title (preview)</th>
+                            <th style="width:50px">Edit</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -200,8 +173,9 @@ function ptm_render_results_page($mismatches, $matches, $total, $updated_ids = [
                                 <td><input type="checkbox" name="ptm_ids[]" value="<?php echo esc_attr($row['ID']); ?>"></td>
                                 <td><?php echo esc_html($row['ID']); ?></td>
                                 <td><?php echo esc_html($row['page_title']); ?></td>
+                                <td><code><?php echo esc_html($row['product_id']); ?></code></td>
                                 <td><?php echo esc_html($row['product_title']); ?></td>
-                                <td style="color:#2271b1;font-weight:600"><?php echo esc_html($row['new_title']); ?></td>
+                                <td style="color:#2271b1;font-weight:600"><?php echo esc_html($row['correct_title']); ?></td>
                                 <td><a href="<?php echo esc_url($row['edit_link']); ?>" target="_blank">Edit</a></td>
                             </tr>
                         <?php endforeach; ?>
@@ -213,7 +187,7 @@ function ptm_render_results_page($mismatches, $matches, $total, $updated_ids = [
                         Update Selected Titles
                     </button>
                     <span class="description" style="margin-left:10px">
-                        Copies <code>product_title</code> into the page title after the model number.
+                        Sets each page title to <code>product_id product_title</code>.
                     </span>
                 </p>
             </form>
@@ -266,60 +240,30 @@ function ptm_handle_batch_update() {
             continue;
         }
 
+        $product_id    = trim((string)get_field('product_id', $post_id));
         $product_title = trim((string)get_field('product_title', $post_id));
-        if ($product_title === '') {
+
+        $correct_title = ptm_build_correct_title($product_id, $product_title);
+        if ($correct_title === '') {
             continue;
         }
 
-        $new_title = ptm_build_new_title($post->post_title, $product_title);
-
-        // Also build a matching slug.
-        $new_slug = sanitize_title($new_title);
-
         wp_update_post([
             'ID'         => $post_id,
-            'post_title' => $new_title,
-            'post_name'  => $new_slug,
+            'post_title' => $correct_title,
+            'post_name'  => sanitize_title($correct_title),
         ]);
 
         $updated_ids[] = $post_id;
     }
 
-    // Re-scan after updates so the table reflects the new state.
-    $products = get_posts([
-        'post_type'      => 'product',
-        'posts_per_page' => -1,
-        'post_status'    => 'any',
-        'orderby'        => 'title',
-        'order'          => 'ASC',
-    ]);
-
-    $mismatches = [];
-    $matches    = 0;
-
-    foreach ($products as $product) {
-        $page_title    = trim($product->post_title);
-        $product_title = trim((string)get_field('product_title', $product->ID));
-
-        if ($product_title === '') {
-            continue;
-        }
-
-        list(, $name_portion) = ptm_split_title($page_title);
-
-        if (mb_strtolower($name_portion) === mb_strtolower($product_title)) {
-            $matches++;
-        } else {
-            $mismatches[] = [
-                'ID'            => $product->ID,
-                'page_title'    => $page_title,
-                'product_title' => $product_title,
-                'name_portion'  => $name_portion,
-                'new_title'     => ptm_build_new_title($page_title, $product_title),
-                'edit_link'     => get_edit_post_link($product->ID, 'raw'),
-            ];
-        }
-    }
-
-    ptm_render_results_page($mismatches, $matches, count($products), $updated_ids);
+    // Re-scan after updates.
+    $scan = ptm_scan_products();
+    ptm_render_results_page(
+        $scan['mismatches'],
+        $scan['matches'],
+        $scan['total'],
+        $scan['skipped'],
+        $updated_ids
+    );
 }
