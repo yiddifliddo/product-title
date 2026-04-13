@@ -23,12 +23,29 @@ function ptm_add_admin_page() {
 }
 
 /**
+ * Normalise cubic-foot variations to "Cu. Ft."
+ *
+ * Handles: "Cubic Foot", "cubic foot", "cu.ft", "Cu. Ft" (no trailing dot), etc.
+ */
+function ptm_normalise_cuft($text) {
+    // "Cubic Foot" / "cubic foot" → "Cu. Ft."
+    $text = preg_replace('/\bcubic\s+foot\b/i', 'Cu. Ft.', $text);
+
+    // "cu.ft" (no spaces/dots) → "Cu. Ft."
+    // "Cu. Ft" (missing trailing dot) → "Cu. Ft."
+    // Catches all sloppy variants like "cu.ft", "Cu.Ft", "Cu. Ft", etc.
+    $text = preg_replace('/\bcu\.?\s*ft\.?\b/i', 'Cu. Ft.', $text);
+
+    return $text;
+}
+
+/**
  * Build the correct page title from ACF fields.
  * Format: "product_id product_title"
  */
 function ptm_build_correct_title($product_id, $product_title) {
     $id   = trim($product_id);
-    $desc = trim($product_title);
+    $desc = trim(ptm_normalise_cuft($product_title));
 
     if ($id === '' && $desc === '') {
         return '';
