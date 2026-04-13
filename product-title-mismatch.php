@@ -2,10 +2,13 @@
 /**
  * Plugin Name: Product Title Mismatch Scanner
  * Description: Scans ACF "product_title" vs WordPress page title for the "product" custom post type. Lists mismatches and allows batch updating.
- * Version: 2.1.0
+ * Version: 2.2.0
  * Author: Lab Res
  *
  * Changelog:
+ *   2.2.0 - Paginated mismatch list to 20 per page to prevent site crashes
+ *           during batch updates. Processes only the current page of results.
+ *
  *   2.1.0 - Fixed double-dot bug in Cu. Ft. normalisation. Regex was matching
  *           already-correct "Cu. Ft." and appending an extra period. Added
  *           negative lookahead to skip text that already has the trailing dot.
@@ -142,14 +145,22 @@ function ptm_render_page() {
         return;
     }
 
-    $scan = ptm_scan_products();
-    ptm_render_results_page($scan['mismatches'], $scan['matches'], $scan['total'], $scan['skipped']);
+    $scan    = ptm_scan_products();
+    $page    = isset($_GET['ptm_page']) ? max(1, intval($_GET['ptm_page'])) : 1;
+    ptm_render_results_page($scan['mismatches'], $scan['matches'], $scan['total'], $scan['skipped'], [], $page);
 }
 
 /**
  * Render the results / batch-update form.
  */
-function ptm_render_results_page($mismatches, $matches, $total, $skipped, $updated_ids = []) {
+function ptm_render_results_page($mismatches, $matches, $total, $skipped, $updated_ids = [], $current_page = 1) {
+    $per_page    = 20;
+    $total_mm    = count($mismatches);
+    $total_pages = max(1, ceil($total_mm / $per_page));
+    $current_page = max(1, min($current_page, $total_pages));
+    $offset      = ($current_page - 1) * $per_page;
+    $page_rows   = array_slice($mismatches, $offset, $per_page);
+    $base_url    = admin_url('tools.php?page=product-title-mismatch');
     ?>
     <div class="wrap">
         <h1>Product Title Mismatch Scanner</h1>
@@ -164,7 +175,7 @@ function ptm_render_results_page($mismatches, $matches, $total, $skipped, $updat
             <tbody>
                 <tr><td><strong>Total products</strong></td><td><?php echo esc_html($total); ?></td></tr>
                 <tr><td><strong>Matching</strong></td><td><?php echo esc_html($matches); ?></td></tr>
-                <tr style="color:#d63638"><td><strong>Mismatched</strong></td><td><?php echo esc_html(count($mismatches)); ?></td></tr>
+                <tr style="color:#d63638"><td><strong>Mismatched</strong></td><td><?php echo esc_html($total_mm); ?></td></tr>
                 <tr><td><strong>Skipped (no ACF data)</strong></td><td><?php echo esc_html($skipped); ?></td></tr>
             </tbody>
         </table>
@@ -181,9 +192,40 @@ function ptm_render_results_page($mismatches, $matches, $total, $skipped, $updat
             </div>
         <?php else: ?>
 
-            <form method="post" style="margin-top:20px">
+            <?php if ($total_pages > 1): ?>
+                <div class="tablenav top" style="margin-top:15px">
+                    <div class="tablenav-pages">
+                        <span class="displaying-num"><?php echo esc_html($total_mm); ?> mismatches</span>
+                        <span class="pagination-links">
+                            <?php if ($current_page > 1): ?>
+                                <a class="button" href="<?php echo esc_url($base_url . '&ptm_page=1'); ?>">&laquo; First</a>
+                                <a class="button" href="<?php echo esc_url($base_url . '&ptm_page=' . ($current_page - 1)); ?>">&lsaquo; Prev</a>
+                            <?php else: ?>
+                                <span class="button disabled">&laquo; First</span>
+                                <span class="button disabled">&lsaquo; Prev</span>
+                            <?php endif; ?>
+
+                            <span class="paging-input">
+                                <strong><?php echo esc_html($current_page); ?></strong> of
+                                <strong><?php echo esc_html($total_pages); ?></strong>
+                            </span>
+
+                            <?php if ($current_page < $total_pages): ?>
+                                <a class="button" href="<?php echo esc_url($base_url . '&ptm_page=' . ($current_page + 1)); ?>">Next &rsaquo;</a>
+                                <a class="button" href="<?php echo esc_url($base_url . '&ptm_page=' . $total_pages); ?>">Last &raquo;</a>
+                            <?php else: ?>
+                                <span class="button disabled">Next &rsaquo;</span>
+                                <span class="button disabled">Last &raquo;</span>
+                            <?php endif; ?>
+                        </span>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <form method="post" style="margin-top:10px">
                 <?php wp_nonce_field('ptm_batch_update', 'ptm_nonce'); ?>
                 <input type="hidden" name="ptm_action" value="batch_update">
+                <input type="hidden" name="ptm_page" value="<?php echo esc_attr($current_page); ?>">
 
                 <table class="widefat striped" style="margin-top:10px">
                     <thead>
@@ -198,7 +240,7 @@ function ptm_render_results_page($mismatches, $matches, $total, $skipped, $updat
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($mismatches as $row): ?>
+                        <?php foreach ($page_rows as $row): ?>
                             <tr>
                                 <td><input type="checkbox" name="ptm_ids[]" value="<?php echo esc_attr($row['ID']); ?>"></td>
                                 <td><?php echo esc_html($row['ID']); ?></td>
@@ -217,7 +259,7 @@ function ptm_render_results_page($mismatches, $matches, $total, $skipped, $updat
                         Update Selected Titles
                     </button>
                     <span class="description" style="margin-left:10px">
-                        Sets each page title to <code>product_id product_title</code>.
+                        Updates only the checked rows on this page (max 20 at a time).
                     </span>
                 </p>
             </form>
@@ -289,11 +331,20 @@ function ptm_handle_batch_update() {
 
     // Re-scan after updates.
     $scan = ptm_scan_products();
+    $page = isset($_POST['ptm_page']) ? max(1, intval($_POST['ptm_page'])) : 1;
+
+    // If the current page is now beyond the last page, go to page 1.
+    $total_pages = max(1, ceil(count($scan['mismatches']) / 20));
+    if ($page > $total_pages) {
+        $page = 1;
+    }
+
     ptm_render_results_page(
         $scan['mismatches'],
         $scan['matches'],
         $scan['total'],
         $scan['skipped'],
-        $updated_ids
+        $updated_ids,
+        $page
     );
 }
