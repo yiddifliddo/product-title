@@ -71,7 +71,7 @@ function ptm_strip_capacity($text) {
  * Format: "product_id product_title"
  */
 function ptm_build_correct_title($product_id, $product_title) {
-    $id   = ptm_strip_capacity(trim($product_id));
+    $id   = trim($product_id);
     $desc = ptm_strip_capacity(trim(ptm_normalise_cuft($product_title)));
 
     if ($id === '' && $desc === '') {
