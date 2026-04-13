@@ -31,10 +31,9 @@ function ptm_normalise_cuft($text) {
     // "Cubic Foot" / "cubic foot" → "Cu. Ft."
     $text = preg_replace('/\bcubic\s+foot\b/i', 'Cu. Ft.', $text);
 
-    // "cu.ft" (no spaces/dots) → "Cu. Ft."
-    // "Cu. Ft" (missing trailing dot) → "Cu. Ft."
-    // Catches all sloppy variants like "cu.ft", "Cu.Ft", "Cu. Ft", etc.
-    $text = preg_replace('/\bcu\.?\s*ft\.?\b/i', 'Cu. Ft.', $text);
+    // Skip anything already exactly "Cu. Ft." — only fix sloppy variants
+    // like "cu.ft", "Cu.Ft", "Cu. Ft" (missing trailing dot), etc.
+    $text = preg_replace('/\bcu\.?\s*ft\.?(?!\.)(?:\b)?/i', 'Cu. Ft.', $text);
 
     return $text;
 }
