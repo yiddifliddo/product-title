@@ -2,8 +2,22 @@
 /**
  * Plugin Name: Product Title Mismatch Scanner
  * Description: Scans ACF "product_title" vs WordPress page title for the "product" custom post type. Lists mismatches and allows batch updating.
- * Version: 2.0.0
+ * Version: 2.1.0
  * Author: Lab Res
+ *
+ * Changelog:
+ *   2.1.0 - Fixed double-dot bug in Cu. Ft. normalisation. Regex was matching
+ *           already-correct "Cu. Ft." and appending an extra period. Added
+ *           negative lookahead to skip text that already has the trailing dot.
+ *           Re-run scan to fix any titles updated with "Cu. Ft.." from 2.0.0.
+ *
+ *   2.0.0 - Rewrote title building to use "product_id product_title" from ACF
+ *           fields. Dropped master_model_number and separator-guessing logic.
+ *           Added normalisation of cubic foot variations (Cubic Foot, cubic foot,
+ *           cu.ft, Cu. Ft) to standard "Cu. Ft." format.
+ *
+ *   1.0.0 - Initial release. Separator-based title splitting (dash, en-dash,
+ *           em-dash, colon).
  */
 
 if (!defined('ABSPATH')) {
