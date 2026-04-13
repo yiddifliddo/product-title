@@ -2,10 +2,12 @@
 /**
  * Plugin Name: Product Title Mismatch Scanner
  * Description: Scans ACF "product_title" vs WordPress page title for the "product" custom post type. Lists mismatches and allows batch updating.
- * Version: 2.2.0
+ * Version: 2.3.0
  * Author: Lab Res
  *
  * Changelog:
+ *   2.3.0 - Strip the word "Capacity" / "capacity" from product titles.
+ *
  *   2.2.0 - Paginated mismatch list to 20 per page to prevent site crashes
  *           during batch updates. Processes only the current page of results.
  *
@@ -56,12 +58,21 @@ function ptm_normalise_cuft($text) {
 }
 
 /**
+ * Strip the word "Capacity" from text and clean up any double spaces left behind.
+ */
+function ptm_strip_capacity($text) {
+    $text = preg_replace('/[-\s]*\bcapacity\b[-\s]*/i', ' ', $text);
+    $text = preg_replace('/\s{2,}/', ' ', $text);
+    return trim($text);
+}
+
+/**
  * Build the correct page title from ACF fields.
  * Format: "product_id product_title"
  */
 function ptm_build_correct_title($product_id, $product_title) {
-    $id   = trim($product_id);
-    $desc = trim(ptm_normalise_cuft($product_title));
+    $id   = ptm_strip_capacity(trim($product_id));
+    $desc = ptm_strip_capacity(trim(ptm_normalise_cuft($product_title)));
 
     if ($id === '' && $desc === '') {
         return '';
