@@ -331,6 +331,12 @@ function ptm_handle_batch_update() {
             continue;
         }
 
+        // Strip "Capacity" from the product_title ACF field and write it back.
+        $clean_product_title = ptm_strip_capacity($product_title);
+        if ($clean_product_title !== $product_title) {
+            update_field('product_title', $clean_product_title, $post_id);
+        }
+
         wp_update_post([
             'ID'         => $post_id,
             'post_title' => $correct_title,
