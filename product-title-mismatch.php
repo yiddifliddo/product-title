@@ -84,7 +84,7 @@ function ptm_build_correct_title($product_id, $product_title) {
         return $id;
     }
 
-    return $id . ' ' . $desc;
+    return ptm_strip_capacity($id . ' ' . $desc);
 }
 
 /**
